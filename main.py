@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi import Query
 from pydantic import BaseModel
 import requests
 import time
@@ -257,8 +258,9 @@ class TikTokFlow:
 
 # =========================
 # API ROUTE
-# =========================
-@app.post("/check")
-def check_user(data: UserRequest):
-    flow = TikTokFlow(data.username)
+# ========================
+
+@app.get("/check")
+def check_user(username: str = Query(...)):
+    flow = TikTokFlow(username)
     return flow.run()
